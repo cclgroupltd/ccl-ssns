@@ -33,7 +33,7 @@ import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.4"
+__version__ = "0.5"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -215,6 +215,11 @@ class WebHistoryItem:
                     # Blob of data
                     b_length, =  struct.unpack("<i", f.read(4))
                     form_data.append(f.read(b_length))
+                    if b_length % 4 == 0:
+                        align_skip_count = 0
+                    else:
+                        align_skip_count = 4 - (b_length % 4)
+                    f.read(align_skip_count)
                 elif record_type == 1 or record_type == 2:
                     file_path = read_str_16(f, string_length_is_bytes)
                     file_start, = struct.unpack("<q", f.read(8))
@@ -370,11 +375,22 @@ def read_tab_restore_command(command_buffer, command_id):
     title = read_str_16(command_buffer)
     state_length, = struct.unpack("<i", command_buffer.read(4))
     state_blob = command_buffer.read(state_length)
+    if state_length % 4 == 0:
+        align_skip_count = 0
+    else:
+        align_skip_count = 4 - (state_length % 4)
+    command_buffer.seek(align_skip_count, SEEK_CUR)
     transition_type, has_post_data = struct.unpack("<2i", command_buffer.read(8))
     referrer_url = read_str_8(command_buffer)
     referrer_policy, = struct.unpack("<i", command_buffer.read(4))
-    request_url = read_str_8(command_buffer)
-    is_overriding_user_agent, = struct.unpack("<i", command_buffer.read(4))
+    # It appears that some (older?) versions of the file format didn't have these last two fields
+    # deal with that here
+    if command_buffer.tell() == len(command_buffer.getvalue()):
+        request_url = ""
+        is_overriding_user_agent = 0
+    else:
+        request_url = read_str_8(command_buffer)
+        is_overriding_user_agent, = struct.unpack("<i", command_buffer.read(4))
 
     # Parse state
     state = WebHistoryItem.from_bytes(state_blob[4:]) # first 32bits is the internal pickle size. We dont' need it.
