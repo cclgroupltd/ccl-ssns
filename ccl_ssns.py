@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 """
 Copyright (c) 2012, CCL Forensics
 All rights reserved.
@@ -31,11 +29,12 @@ import sys
 import struct
 import io
 from os import SEEK_CUR, SEEK_END, SEEK_SET
+import traceback
 import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.5"
+__version__ = "0.6"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -70,6 +69,10 @@ PAGE_TRANSITION_QUALIFIERS = {
                               }
 
 PAGE_TRANSITION_QUALIFIER_MASK = 0xFFFFFF00
+
+class SsnsError(Exception):
+    pass
+
 class WebHistoryItem:
     def __init__(self, url_string, original_url, target, parent, title, alt_title, last_visited_time, 
                  scroll_offset_x, scroll_offset_y, is_target_item, visit_count, referrer, document_state,
@@ -352,7 +355,8 @@ def read_command(f):
 
     # Check that it's long enough
     if len(command_bytes) < command_size:
-        return None # we've hit the end of the file prematurely
+        raise SsnsError("Error: Command bytes is less than the stated command size. We have hit the end of the stream prematurely")
+        #return None # we've hit the end of the file prematurely
 
     # Put bytes into a BytesIO to make life easier
     command_buffer = io.BytesIO(command_bytes)
@@ -413,8 +417,24 @@ def load_iter(f, file_type):
         raise ValueError("File version is not 1")
 
     while True: 
-        command = read_command(f)
+        record_start_offset = f.tell()
+        #print("Reading record at {0}".format(record_start_offset))
+        try:
+            command = read_command(f)
+        except (struct.error, IOError, SsnsError) as e:
+            print("Error reading record begining at data offset {0}.".format(record_start_offset))
+            print("Error caused by: {0}.".format(e))
+            print("Tracebck follows for debugging:")
+            print()
+            print("---------------EXCEPTION BEGINS---------------")
+            traceback.print_exc(limit=None, file=sys.stdout)
+            print("----------------EXCEPTION ENDS----------------")
+            print()
+            print("NB: No further records will be read.")
+            
+            command = None
         if command:
+            #print("Yeilding record at {0}".format(record_start_offset))
             yield command
         else:
             break
@@ -520,6 +540,7 @@ def main():
         print("Usage: <Current/Last Session/Tabs> <output.html>")
         sys.exit() 
     
+    print("Processing begins...")
     # load infile
     f = open(sys.argv[1], "rb")
 
@@ -545,6 +566,8 @@ def main():
     out = open(sys.argv[2], "wt", encoding="utf-8")
     out.write(minidom.parseString(etree.tostring(document_root, encoding="utf-8")).toprettyxml())
     out.close()
+
+    print("Processing finished.")
 
 if __name__ == "__main__":
     main()
