@@ -34,7 +34,7 @@ import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.6"
+__version__ = "0.7"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -122,21 +122,23 @@ class WebHistoryItem:
 
     def parse_document_state_text(self):
         res = []
-        for i in range(0, len(self.document_state), 3):
-            state_slice = self.document_state[i:i+3]
-            padcount = (3 - (len(state_slice) % 3))
-            state_slice += [""]*padcount
-            res.append("Name: \"{0}\"; Type: \"{1}\"; Value: \"{2}\"".format(state_slice[0], state_slice[1], state_slice[2]))
+        if self.document_state:
+            for i in range(0, len(self.document_state), 3):
+                state_slice = self.document_state[i:i+3]
+                padcount = (3 - (len(state_slice) % 3))
+                state_slice += [""]*padcount
+                res.append("Name: \"{0}\"; Type: \"{1}\"; Value: \"{2}\"".format(state_slice[0], state_slice[1], state_slice[2]))
             
         return res
 
     def parse_document_state(self):
         res = []
-        for i in range(0, len(self.document_state), 3):
-            state_slice = self.document_state[i:i+3]
-            padcount = (3 - (len(state_slice) % 3))
-            state_slice += [""]*padcount
-            res.append(tuple(state_slice))
+        if self.document_state:
+            for i in range(0, len(self.document_state), 3):
+                state_slice = self.document_state[i:i+3]
+                padcount = (3 - (len(state_slice) % 3))
+                state_slice += [""]*padcount
+                res.append(tuple(state_slice))
             
         return res
             
@@ -152,6 +154,16 @@ class WebHistoryItem:
         # Details of the encoding can be found in chrome source, webkit/glue/glue_serialize.cc
        
         version, = struct.unpack("<i", f.read(4))
+
+        # If the version is -1 all we have is a url string and we can
+        # leave early with just that.
+        if version == -1:
+            url = read_str_8(f)
+            return cls(url, None, None, None, None, None, None, None, None, 
+                   None, None, None, None, None, None, None,
+                   None, None, None, None)
+
+
 
         # Based on the version, the strings may be encoded differently.
         # (See: webkit/glue/glue_serialize.cc; WriteString in Chrome source).
