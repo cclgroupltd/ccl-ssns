@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Copyright (c) 2012, CCL Forensics
 All rights reserved.
@@ -34,7 +36,7 @@ import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.7"
+__version__ = "0.8"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -411,7 +413,12 @@ def read_tab_restore_command(command_buffer, command_id):
         is_overriding_user_agent, = struct.unpack("<i", command_buffer.read(4))
 
     # Parse state
-    state = WebHistoryItem.from_bytes(state_blob[4:]) # first 32bits is the internal pickle size. We dont' need it.
+    if state_length > 4:
+        state = WebHistoryItem.from_bytes(state_blob[4:]) # first 32bits is the internal pickle size. We dont' need it.
+    else:
+        state = WebHistoryItem(None, None, None, None, None, None, None, None, None, 
+                   None, None, None, None, None, None, None,
+                   None, None, None, None)
 
     return SessionCommand(command_id, tab_id, index, url, title, state, transition_type, has_post_data > 0, 
                           referrer_url, referrer_policy, request_url, is_overriding_user_agent > 0)
@@ -422,7 +429,7 @@ def load_iter(f, file_type):
     # Check header
     sig = f.read(len(FILE_SIGNATURE))
     if sig != FILE_SIGNATURE:
-        raise ValueError("File signature is not SSNS")
+        raise ValueError("File signature is not SNSS")
     
     ver, = struct.unpack("<i", f.read(4))
     if ver != 1:
@@ -430,13 +437,12 @@ def load_iter(f, file_type):
 
     while True: 
         record_start_offset = f.tell()
-        #print("Reading record at {0}".format(record_start_offset))
         try:
             command = read_command(f)
         except (struct.error, IOError, SsnsError) as e:
             print("Error reading record begining at data offset {0}.".format(record_start_offset))
             print("Error caused by: {0}.".format(e))
-            print("Tracebck follows for debugging:")
+            print("Traceback follows for debugging:")
             print()
             print("---------------EXCEPTION BEGINS---------------")
             traceback.print_exc(limit=None, file=sys.stdout)
@@ -446,7 +452,6 @@ def load_iter(f, file_type):
             
             command = None
         if command:
-            #print("Yeilding record at {0}".format(record_start_offset))
             yield command
         else:
             break
