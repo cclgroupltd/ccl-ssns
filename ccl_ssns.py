@@ -36,7 +36,7 @@ import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.8"
+__version__ = "0.9"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -71,6 +71,9 @@ PAGE_TRANSITION_QUALIFIERS = {
                               }
 
 PAGE_TRANSITION_QUALIFIER_MASK = 0xFFFFFF00
+
+SKIP_ERRORS = False
+USE_EXPERIMENTAL_FEATURES = True # if you are getting errors or strange output try setting to False
 
 class SsnsError(Exception):
     pass
@@ -143,7 +146,59 @@ class WebHistoryItem:
                 res.append(tuple(state_slice))
             
         return res
-            
+
+    def parse_form_data(self): # Experimental
+        for form in self.form_data:
+            if not isinstance(form, bytes):
+                continue # Currently only understand the "blob" field
+
+            awaiting_input = 0x00
+            in_boundary = 0x01
+            in_data = 0x02
+
+            state = awaiting_input
+            name = None
+            value = []
+            for line in form.decode("utf-8").splitlines():
+                
+                if line.strip() == "":
+                    continue
+                
+                if state == awaiting_input:
+                    if  not line.startswith("------WebKitFormBoundary"):
+                        raise Exception("Unexpected input while parsing Form Data")
+                    else:
+                        state = in_boundary
+                        name = None
+                        value = []
+
+                elif state == in_boundary:
+                    if not line.startswith("Content-Disposition"):
+                        raise Exception("Unexpected input while parsing Form Data")
+                    else:
+                        fields = [f.strip() for f in line.split(";")]
+                        content_disposition = fields[0].split(":")[1].strip()
+                        if content_disposition != "form-data":
+                            raise Exception("Unexpected content-dispostion while parsing Form Data ({0})".format(content_disposition))
+                        for field in fields[1:]:
+                            k,v = field.split("=", 1)
+                            if k == "name":
+                                name = v.strip("\"")
+                        if name == None:
+                            raise Exception("Form field name still unknown after parsing form-data Content-Disposition")
+                        state = in_data
+
+                elif state == in_data:
+                    if line.startswith("------WebKitFormBoundary"):
+                        yield name, "\n".join(value)
+                        state = in_boundary
+                        name = None
+                        value = []
+                    else:
+                        value.append(line)
+                
+                else:
+                    raise Exception("Invalid state ({0})".format(state))
          
     @classmethod
     def from_bytes(cls, data):
@@ -154,8 +209,17 @@ class WebHistoryItem:
     @classmethod
     def from_stream(cls, f):
         # Details of the encoding can be found in chrome source, webkit/glue/glue_serialize.cc
-       
-        version, = struct.unpack("<i", f.read(4))
+
+        # Encountered an edge case (or possibly mal-formed data) where in the
+        # subitems (see below) we end being told that we have more than we
+        # actually have (or the data is truncated). At which point we'll be 
+        # given an empty string here. We need to back out and return None
+        # at which point.
+        try:
+            version, = struct.unpack("<i", f.read(4))
+        except struct.error:
+            # empty stream, abandon all hope
+            return None
 
         # If the version is -1 all we have is a url string and we can
         # leave early with just that.
@@ -257,13 +321,29 @@ class WebHistoryItem:
         content_type = read_str_16(f, string_length_is_bytes)
         # referrer happens again (for backwards compatibility apparently) we've
         # already got it so we can just throw it away
-        read_str_16(f, string_length_is_bytes)
+        # UPDATE: found a case where this isn't present, so much for backwards
+        #         compatibility (not that we ever actually cared about it. So
+        #         anyway, we need to catch that case here. Of course, if this
+        #         is missing, so are the sub items so we need to let that bit
+        #         of the code not to bother as well
+        this_state_is_truncated = False
+        try:
+            read_str_16(f, string_length_is_bytes)
+        except struct.error:
+            this_state_is_truncated = True
         
-        # Finally there can be subitems...
-        sub_item_count, = struct.unpack("<i", f.read(4))
+        # Finally there can be subitems (if we're not truncated)...
         sub_items = []
-        for i in range(sub_item_count):
-            sub_items.append(WebHistoryItem.from_stream(f))
+        if not this_state_is_truncated:
+            sub_item_count, = struct.unpack("<i", f.read(4))
+            for i in range(sub_item_count):
+                sub = WebHistoryItem.from_stream(f)
+                if sub:
+                    sub_items.append(sub)
+                else:
+                    # We got None back from from_stream() which means something 
+                    # went wrong. Give up and take what we've got.
+                    break
 
 
         return cls(url, original_url, target, parent, title, alt_title, timestamp, x_scroll_offset, y_scroll_offset, 
@@ -402,10 +482,15 @@ def read_tab_restore_command(command_buffer, command_id):
     command_buffer.seek(align_skip_count, SEEK_CUR)
     transition_type, has_post_data = struct.unpack("<2i", command_buffer.read(8))
     referrer_url = read_str_8(command_buffer)
-    referrer_policy, = struct.unpack("<i", command_buffer.read(4))
-    # It appears that some (older?) versions of the file format didn't have these last two fields
+    
+    # It appears that some (older?) versions of the file format didn't have these last two or three fields
     # deal with that here
-    if command_buffer.tell() == len(command_buffer.getvalue()):
+    if command_buffer.tell() >= len(command_buffer.getvalue()):
+        referrer_policy = 0
+    else:
+        referrer_policy, = struct.unpack("<i", command_buffer.read(4))
+
+    if command_buffer.tell() >= len(command_buffer.getvalue()):
         request_url = ""
         is_overriding_user_agent = 0
     else:
@@ -448,9 +533,12 @@ def load_iter(f, file_type):
             traceback.print_exc(limit=None, file=sys.stdout)
             print("----------------EXCEPTION ENDS----------------")
             print()
-            print("NB: No further records will be read.")
             
-            command = None
+            if SKIP_ERRORS:
+                continue
+            else:
+                print("NB: No further records will be read.")
+                command = None
         if command:
             yield command
         else:
@@ -545,12 +633,38 @@ def build_command_table(command, parent_element):
     
     # Document State
     doc_state_head_td = etree.SubElement(command_row, "td", {"class":"command_attr"})
-    doc_state_head_td.text = "Document State"
+    doc_state_head_td.text = "Document States (Including document sub-items)"
     doc_state_data_td = etree.SubElement(command_row, "td", {"class":"command_value"})
-    for item in command.web_history_item.parse_document_state_text():
-        doc_state_data_p = etree.SubElement(doc_state_data_td, "p", {"class":"no-space-after"})
-        doc_state_data_p.text = item
     
+    def recurs_doc_state(whi, node):
+        for item in whi.parse_document_state_text():
+            doc_state_data_p = etree.SubElement(node, "p", {"class":"no-space-after"})
+            doc_state_data_p.text = item
+            
+        for sub in whi.sub_items:
+            recurs_doc_state(sub, node)
+
+    recurs_doc_state(command.web_history_item, doc_state_data_td)
+
+    # --ROW--
+    command_row = etree.SubElement(command_table, "tr", {"class":"command_row"})
+
+    # FORM DATA (EXPERIMENTAL)
+    if USE_EXPERIMENTAL_FEATURES:
+        form_data_head_td = etree.SubElement(command_row, "td", {"class":"command_attr"})
+        form_data_head_td.text = "Submitted Form Data (EXPERIMENTAL)"
+        form_data_data_td = etree.SubElement(command_row, "td", {"class":"command_value"})
+
+        def recurs_form_data(whi, node):
+            for item in whi.parse_form_data():
+                form_data_data_p = etree.SubElement(node, "p", {"class":"no-space-after"})
+                form_data_data_p.text = "Name: \"{0}\"; Value: \"{1}\"".format(*item)
+            
+            for sub in whi.sub_items:
+                recurs_form_data(sub, node)
+    
+        recurs_form_data(command.web_history_item, form_data_data_td)
+
 
 def main():
     if len(sys.argv) < 3:
@@ -575,8 +689,6 @@ def main():
             build_command_table(c, body)
             etree.SubElement(body, "br")
             
-            
-
     f.close()
 
     # Write output (using minidom for prettification)
