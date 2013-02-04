@@ -36,7 +36,7 @@ import xml.etree.ElementTree as etree # For reporting. Not used during parsing.
 import xml.dom.minidom as minidom # Again, only for reporting (prettyprint)
 
 
-__version__ = "0.9"
+__version__ = "0.10.0"
 __description__ = "Parses the Chrome Session/Tab restore (SNSS) files"
 __contact__ = "Alex Caithness"
 
@@ -148,7 +148,7 @@ class WebHistoryItem:
         return res
 
     def parse_form_data(self): # Experimental
-        for form in self.form_data:
+        for form in self.form_data or []:
             if not isinstance(form, bytes):
                 continue # Currently only understand the "blob" field
 
@@ -159,6 +159,24 @@ class WebHistoryItem:
             state = awaiting_input
             name = None
             value = []
+            
+            form_data_lines = form.decode("utf-8").splitlines()
+            # Find first non-blank line, decide how to continue
+            is_webkit_parse = False
+            first_line = ""
+            for line in form_data_lines:
+                if line.strip() == "":
+                    continue
+                else:
+                    first_line = line
+                    break
+            if not first_line.startswith("------WebKitFormBoundary"):
+                # just yield as raw and leave
+                yield "Form Data", form.decode("utf-8")
+                break
+
+            
+
             for line in form.decode("utf-8").splitlines():
                 
                 if line.strip() == "":
@@ -641,7 +659,7 @@ def build_command_table(command, parent_element):
             doc_state_data_p = etree.SubElement(node, "p", {"class":"no-space-after"})
             doc_state_data_p.text = item
             
-        for sub in whi.sub_items:
+        for sub in whi.sub_items or []:
             recurs_doc_state(sub, node)
 
     recurs_doc_state(command.web_history_item, doc_state_data_td)
@@ -660,7 +678,7 @@ def build_command_table(command, parent_element):
                 form_data_data_p = etree.SubElement(node, "p", {"class":"no-space-after"})
                 form_data_data_p.text = "Name: \"{0}\"; Value: \"{1}\"".format(*item)
             
-            for sub in whi.sub_items:
+            for sub in whi.sub_items or []:
                 recurs_form_data(sub, node)
     
         recurs_form_data(command.web_history_item, form_data_data_td)
@@ -693,7 +711,8 @@ def main():
 
     # Write output (using minidom for prettification)
     out = open(sys.argv[2], "wt", encoding="utf-8")
-    out.write(minidom.parseString(etree.tostring(document_root, encoding="utf-8")).toprettyxml())
+    #out.write(minidom.parseString(etree.tostring(document_root, encoding="utf-8").decode()).toprettyxml())
+    out.write(etree.tostring(document_root, encoding="utf-8").decode())
     out.close()
 
     print("Processing finished.")
