@@ -1,6 +1,8 @@
 # ccl-ssns
 
-A set of Python modules for performing off-line parsing of Chrome session files ("Current Session", "Last Session", "Current Tabs", "Last Tabs").
+This module is now out of date and will not process data from recent versions of Chrome. An updated module can be found in this repo: https://github.com/cclgroupltd/ccl_chrome_indexeddb
+
+A set of Python modules for performing off-line parsing of Chrome session files ("Current Session", "Last Session", "Current Tabs", "Last Tabs"). 
 
 Three modules - 
  * `ccl_chrome_pickle.py` - a re-implementation of the PickleIterator for Python
